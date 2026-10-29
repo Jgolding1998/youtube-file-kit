@@ -6,7 +6,8 @@ const path = require("path");
 const fs = require("fs");
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || "playwright");
 
-const PORT = 18765;
+const PORT = Number(process.env.YFK_BROWSER_PORT || 18765);
+if (!Number.isInteger(PORT) || PORT < 1024 || PORT > 65535) throw new Error("Invalid local test port");
 const BASE = `http://127.0.0.1:${PORT}`;
 const OUT = process.env.OUT_DIR || path.join(require("os").tmpdir(), "yfk-browser");
 fs.mkdirSync(OUT, { recursive: true });
@@ -16,8 +17,9 @@ function check(cond, msg) {
   console.log("ok -", msg);
 }
 
-async function waitForServer() {
+async function waitForServer(server) {
   for (let i = 0; i < 100; i++) {
+    if (server.exitCode !== null) throw new Error("local test server exited before startup");
     try { if ((await fetch(BASE + "/")).ok) return; } catch (e) { /* not up yet */ }
     await new Promise((r) => setTimeout(r, 200));
   }
@@ -26,10 +28,10 @@ async function waitForServer() {
 
 (async () => {
   const server = spawn(process.env.PYTHON || "python", [path.join(__dirname, "fake_server.py"), String(PORT), path.join(OUT, "runtime")],
-    { stdio: "inherit", windowsHide: true });
+    { stdio: ["pipe", "inherit", "inherit"], windowsHide: true });
   let browser;
   try {
-    await waitForServer();
+    await waitForServer(server);
     browser = await chromium.launch({ executablePath: process.env.CHROME_PATH, headless: true,
       args: ["--mute-audio", "--no-first-run", "--disable-background-networking", "--disable-sync"] });
     const context = await browser.newContext({ acceptDownloads: true, serviceWorkers: "block" });
@@ -93,6 +95,13 @@ async function waitForServer() {
     console.log("ALL BROWSER CHECKS PASSED");
   } finally {
     if (browser) await browser.close();
-    server.kill();
+    await new Promise((resolve, reject) => {
+      if (server.exitCode !== null) return resolve();
+      const timer = setTimeout(() => {server.kill(); reject(new Error("local test server did not shut down"));}, 10000);
+      server.once("exit", () => {clearTimeout(timer); resolve();});
+      server.stdin.on("error", () => {});
+      server.stdin.end("stop\n");
+    });
+    check(!fs.existsSync(path.join(OUT, "runtime")), "test server and runtime shut down cleanly");
   }
 })().catch((e) => { console.error(e); process.exit(1); });

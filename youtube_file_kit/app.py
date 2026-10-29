@@ -43,6 +43,28 @@ def _unique_fields(pairs):
     return result
 
 
+class DownloadResponse(Response):
+    def __init__(self, manager: JobManager, job_id: str):
+        super().__init__()
+        self.manager, self.job_id = manager, job_id
+
+    async def __call__(self, scope, receive, send):
+        lease = self.manager.acquire_file(self.job_id)
+        if lease is None:
+            return await JSONResponse({"error": "not_found", "message": "File is not ready or has expired."},
+                                      status_code=404)(scope, receive, send)
+        try:
+            media = _MEDIA_TYPES.get(lease.path.suffix.lower(), "application/octet-stream")
+            response = FileResponse(lease.path, filename=lease.filename, media_type=media)
+            # Keep file streaming in this call so the lease outlives the actual open handle.
+            scope = {**scope, "extensions": {key: value for key, value in scope.get("extensions", {}).items()
+                                             if key != "http.response.pathsend"}}
+            await response(scope, receive, send)
+        finally:
+            with anyio.CancelScope(shield=True):
+                await anyio.to_thread.run_sync(lease.release)
+
+
 def create_app(*, port: int, tools: Tools | None = None, limits: Limits | None = None,
                root: Path | None = None, runner=None) -> LocalGuard:
     token = secrets.token_urlsafe(32)
@@ -106,12 +128,11 @@ def create_app(*, port: int, tools: Tools | None = None, limits: Limits | None =
         return JSONResponse({"ok": True})
 
     async def job_file(request: Request) -> Response:
-        job = lookup(request)
-        if job is None or job.state != "done" or job.file_path is None or not job.file_path.is_file():
+        job_id = request.path_params["job_id"]
+        if not _JOB_ID.fullmatch(job_id):
             return JSONResponse({"error": "not_found", "message": "File is not ready or has expired."},
                                 status_code=404)
-        media = _MEDIA_TYPES.get(job.file_path.suffix.lower(), "application/octet-stream")
-        return FileResponse(job.file_path, filename=job.filename, media_type=media)
+        return DownloadResponse(manager, job_id)
 
     @contextlib.asynccontextmanager
     async def lifespan(app):

@@ -20,6 +20,8 @@ Only save videos you have the right to save, and follow YouTube's Terms of Servi
 - Optional: [FFmpeg](https://ffmpeg.org/) on `PATH`. With it, the app can join separate video and audio streams (up to 1080p MP4). Without it, only single-file formats are used, which on YouTube are often 360p.
 - Recommended: [Deno](https://deno.com/) 2.3 or newer on `PATH`. yt-dlp needs a JavaScript runtime for full YouTube support. Without one, YouTube may offer fewer formats or none. See [JavaScript runtime](#javascript-runtime).
 
+Use a maintained, patched FFmpeg build from the distributors linked on its [official download page](https://www.ffmpeg.org/download.html). The app does not install or update FFmpeg or Deno.
+
 ## Start
 
 Windows (PowerShell):
@@ -59,7 +61,7 @@ Options (all optional):
 
 1. The link is parsed strictly and rebuilt as `https://www.youtube.com/watch?v=<id>`. Anything else is rejected before yt-dlp runs.
 2. yt-dlp runs as a separate process with a fixed command line, no shell, a minimal environment, its own empty home and temp folders, a time limit, a size limit and a limit of two downloads at once (four more can wait).
-3. The finished file is offered to your browser with a safe name made from the video title. Files stay in a private temp folder for 30 minutes (at most 8 kept), and the folder is deleted when the app stops.
+3. The finished file is offered to your browser with a safe name made from the video title. Files stay available in a private temp folder for 30 minutes (at most 8 available). An active browser transfer keeps its file until it finishes or disconnects, even if that file expires meanwhile. Open transfers count toward a bounded storage budget, so new work can be refused until one finishes. Stopping the app cancels jobs and removes files after active transfers close.
 
 The yt-dlp command line always includes `--ignore-config`, `--no-plugin-dirs`, `--no-remote-components`, `--no-cookies`, `--no-cookies-from-browser`, `--no-exec`, `--no-batch-file`, `--no-cache-dir`, `--no-playlist`, `--use-extractors youtube`, `--downloader native` and `--proxy ""` (direct connection; system proxies are not used). See [SECURITY.md](SECURITY.md) for the full list of controls.
 
@@ -79,7 +81,7 @@ python -m pip install --require-hashes --only-binary=:all: -r requirements-dev.t
 python -m pytest -q
 ```
 
-The tests use a fake yt-dlp program that exercises the real process runner, environment, limits and error handling. They never contact YouTube.
+The tests use a fake yt-dlp program and the pinned CLI with synthetic HTTPS responses. They exercise the real process runner, environment, limits and error handling without contacting YouTube. File-transfer tests cover expiry and retention during headers or body streaming, multiple readers, ranges, cancellation and shutdown. Windows tests delay Job Object assignment, refuse assignment, cancel startup and check that owned descendants are reaped.
 
 An optional single real request downloads yt-dlp's own public test video, capped at 10 MB and 90 seconds:
 

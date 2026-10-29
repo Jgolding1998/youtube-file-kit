@@ -26,8 +26,9 @@ yt-dlp process
 - Environment holds only `PATH` (FFmpeg and Deno folders), a private home and temp folder, and `SYSTEMROOT`/`WINDIR` on Windows. Secrets, proxies and `PYTHONPATH` from your shell are not passed on.
 - Configuration files, plugins (`--no-plugin-dirs` and `YTDLP_NO_PLUGINS`), remote components, cookies, browser cookies, `.netrc`, `--exec`, batch files, cache, updates, file URLs and other extractors are all off. Downloads use yt-dlp's native downloader over HTTPS formats only. The only postprocessing is FFmpeg merging (or none with `--no-ffmpeg`).
 - Output goes to a fixed name inside a new random folder. Existing files are never overwritten; your browser decides where the final file is saved.
-- Limits: wall-clock timeout (30 min), size checked every half second across the job folder (2 GB default), video length (3 h default), live streams refused, two jobs at once plus a queue of four, at most eight finished files kept for 30 minutes.
-- On Windows the process tree runs in a Job Object with a memory cap, a process count cap and kill-on-close, so a stop also ends FFmpeg and Deno. On Linux and macOS the tree runs in its own session and is killed as a group; there is no memory cap there, because an address-space limit would break Deno.
+- Limits: wall-clock timeout (30 min), size checked every half second across the output and temp folders (2 GB default), video length (3 h default), live streams refused, two jobs at once plus a queue of four, at most eight finished files available for 30 minutes. The final metadata verdict is checked after process exit as well as during polling; every nonzero exit remains an error.
+- File responses acquire a lease before sending headers. Expiry, retention and shutdown retire a file from new requests while an existing response keeps it until its handle closes, including errors and disconnects. Retired files remain charged alongside queued and running jobs. With default limits there are at most ten charged file/job slots; admission can refuse new work while transfers remain open. Range and HEAD responses release leases too. Server path offloading is disabled so a file cannot be released before the actual transfer ends.
+- On Windows an isolated base-Python helper (`-I -S`) waits on a private, bounded release message. The app assigns it to a Job Object before sending its PID; the helper checks that this matches its own PID before starting the fixed downloader argv. A redirecting launcher therefore fails closed. A cancellation, expired deadline or assignment failure leaves the gate closed. The real child has no stdin, retains the fixed argv and sanitized environment, and inherits the memory, process-count and kill-on-close controls. One additional process slot is reserved for the fixed helper; its memory stays within the shared job memory cap. On Linux and macOS the tree runs in its own session and is killed as a group; there is no memory cap there, because an address-space limit would break Deno.
 
 Deno
 
@@ -36,9 +37,10 @@ Deno
 Supply chain
 
 - `requirements.txt` pins exact versions with sha256 hashes from PyPI. Install with `--require-hashes --only-binary=:all:`. CI uses actions pinned to commit SHAs, read-only permissions and no secrets.
+- Keep optional FFmpeg and Deno installations patched using their official download links. Python dependency checks do not cover these native tools.
 
 ## Known limits
 
 - This is process containment, not a sandbox: yt-dlp, FFmpeg and Deno run as your user and can read what your user can read.
-- On Windows, a child process could start before it is added to the Job Object (a few milliseconds). Grandchildren started in that window would not be capped.
+- The isolated Windows helper starts before assignment, but executes only the fixed gate code and imports the standard library. Supplied argv starts after successful assignment. OS process creation and Job Object calls cannot be interrupted by the Python deadline; it is checked before and after those calls, and no downloader is released if the budget expired during setup.
 - Any local program running as your user can reach the loopback port. The CSRF token stops web pages, not local software.

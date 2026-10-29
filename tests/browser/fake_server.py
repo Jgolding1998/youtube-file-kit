@@ -1,6 +1,7 @@
 """Serve the real app with the fake yt-dlp transport, for browser tests only."""
 
 import sys
+import threading
 from pathlib import Path
 
 import uvicorn
@@ -15,4 +16,14 @@ port = int(sys.argv[1])
 fake = ROOT / "tests" / "fakes" / "fake_ytdlp.py"
 tools = Tools(python=sys.executable, launcher=(sys.executable, "-I", str(fake)))
 app = create_app(port=port, tools=tools, limits=Limits(timeout=20), root=Path(sys.argv[2]))
-uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning", access_log=False, lifespan="on")
+server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", access_log=False,
+                                     lifespan="on", server_header=False, proxy_headers=False, ws="none"))
+
+
+def stop_from_parent():
+    sys.stdin.readline()
+    server.should_exit = True
+
+
+threading.Thread(target=stop_from_parent, daemon=True).start()
+server.run()

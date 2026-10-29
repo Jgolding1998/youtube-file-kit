@@ -196,6 +196,8 @@ class Job:
     file_path: Optional[Path] = None
     finished: Optional[float] = None
     cancel: threading.Event = field(default_factory=threading.Event)
+    readers: int = field(default=0, repr=False)
+    retired: bool = field(default=False, repr=False)
 
     def public(self) -> dict:
         data = {"state": self.state, "bytes": self.bytes}
@@ -211,33 +213,108 @@ class Busy(Exception):
     pass
 
 
+@dataclass
+class FileLease:
+    path: Path
+    filename: str
+    _manager: JobManager = field(repr=False)
+    _job: Job = field(repr=False)
+    _released: bool = field(default=False, repr=False)
+
+    def release(self) -> None:
+        self._manager._release_file(self)
+
+
 class JobManager:
     def __init__(self, root: Path, tools: Tools, limits: Limits, runner: Callable = run_bounded):
         self.root, self.tools, self.limits, self.runner = Path(root), tools, limits, runner
         self.root.mkdir(parents=True, exist_ok=True)
         self._jobs: dict[str, Job] = {}
         self._lock = threading.Lock()
+        self._closed = False
+        self._stopped = False
+        self._storage_slots = max(limits.max_kept + limits.max_concurrent,
+                                  limits.max_concurrent + limits.max_queued)
         self._pool = ThreadPoolExecutor(max_workers=limits.max_concurrent, thread_name_prefix="yfk-job")
 
     def submit(self, url: str) -> Job:
         self.sweep()
-        self._trim_finished()
-        with self._lock:
-            active = sum(1 for j in self._jobs.values() if j.state in ("queued", "running"))
-            if active >= self.limits.max_concurrent + self.limits.max_queued:
-                raise Busy()
-            job_id = secrets.token_hex(16)
-            job_dir = self.root / job_id
-            for sub in ("out", "tmp", "home"):
-                (job_dir / sub).mkdir(parents=True, mode=0o700)
-            job = Job(id=job_id, url=url, dir=job_dir)
-            self._jobs[job_id] = job
-        self._pool.submit(self._run, job)
+        removed = []
+        try:
+            with self._lock:
+                active = sum(1 for j in self._jobs.values() if j.state in ("queued", "running"))
+                if self._closed or active >= self.limits.max_concurrent + self.limits.max_queued:
+                    raise Busy()
+                removed.extend(self._take_excess_finished(1))
+                charged = sum(j.state != "error" for j in self._jobs.values())
+                needed = max(0, charged - self._storage_slots + 1)
+                evictable = sorted((j for j in self._jobs.values() if j.state == "done" and not j.retired and not j.readers),
+                                   key=lambda j: j.finished)
+                if len(evictable) < needed:
+                    raise Busy()
+                removed.extend(j for j in evictable[:needed] if self._retire_locked(j))
+                job_id = secrets.token_hex(16)
+                job_dir = self.root / job_id
+                for sub in ("out", "tmp", "home"):
+                    (job_dir / sub).mkdir(parents=True, mode=0o700)
+                job = Job(id=job_id, url=url, dir=job_dir)
+                self._jobs[job_id] = job
+                try:
+                    self._pool.submit(self._run, job)
+                except BaseException:
+                    self._jobs.pop(job_id, None)
+                    removed.append(job)
+                    raise
+        finally:
+            for previous in removed:
+                shutil.rmtree(previous.dir, ignore_errors=True)
         return job
 
     def get(self, job_id: str) -> Optional[Job]:
         with self._lock:
-            return self._jobs.get(job_id)
+            job = self._jobs.get(job_id)
+            return job if job is not None and not job.retired else None
+
+    def acquire_file(self, job_id: str) -> Optional[FileLease]:
+        removed = None
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if self._closed or job is None or job.retired or job.state != "done" or job.file_path is None:
+                return None
+            if job.finished is not None and time.monotonic() - job.finished > self.limits.job_ttl:
+                removed = job if self._retire_locked(job) else None
+                lease = None
+            elif not job.file_path.is_file():
+                lease = None
+            else:
+                job.readers += 1
+                lease = FileLease(job.file_path, job.filename or "youtube-video" + job.file_path.suffix, self, job)
+        if removed is not None:
+            shutil.rmtree(removed.dir, ignore_errors=True)
+        return lease
+
+    def _retire_locked(self, job: Job) -> bool:
+        job.retired = True
+        if job.readers:
+            return False
+        self._jobs.pop(job.id, None)
+        return True
+
+    def _release_file(self, lease: FileLease) -> None:
+        with self._lock:
+            if lease._released:
+                return
+            lease._released = True
+            job = lease._job
+            job.readers -= 1
+            remove = job.retired and job.readers == 0
+            if remove:
+                self._jobs.pop(job.id, None)
+            remove_root = self._stopped and not self._jobs
+        if remove:
+            shutil.rmtree(job.dir, ignore_errors=True)
+        if remove_root:
+            shutil.rmtree(self.root, ignore_errors=True)
 
     def cancel(self, job_id: str) -> bool:
         job = self.get(job_id)
@@ -309,6 +386,8 @@ class JobManager:
         )
         if result.stopped:
             return result.stopped
+        if pending:
+            return pending[0]
         if result.returncode != 0:
             return classify(result.stderr)
         found = [p for p in (job.dir / "out").iterdir()
@@ -334,17 +413,14 @@ class JobManager:
         with self._lock:
             expired = [j for j in self._jobs.values()
                        if j.finished is not None and now - j.finished > self.limits.job_ttl]
-            for job in expired:
-                del self._jobs[job.id]
-        for job in expired:
+            removed = [job for job in expired if self._retire_locked(job)]
+        for job in removed:
             shutil.rmtree(job.dir, ignore_errors=True)
 
     def _take_excess_finished(self, reserve: int) -> list[Job]:
-        done = sorted((j for j in self._jobs.values() if j.state == "done"), key=lambda j: j.finished)
+        done = sorted((j for j in self._jobs.values() if j.state == "done" and not j.retired), key=lambda j: j.finished)
         extra = done[: max(0, len(done) - self.limits.max_kept + reserve)]
-        for job in extra:
-            del self._jobs[job.id]
-        return extra
+        return [job for job in extra if self._retire_locked(job)]
 
     def _trim_finished(self) -> None:
         """Bound disk use: keep at most max_kept finished downloads."""
@@ -355,8 +431,16 @@ class JobManager:
 
     def shutdown(self) -> None:
         with self._lock:
+            self._closed = True
             jobs = list(self._jobs.values())
         for job in jobs:
             job.cancel.set()
         self._pool.shutdown(wait=True, cancel_futures=True)
-        shutil.rmtree(self.root, ignore_errors=True)
+        with self._lock:
+            self._stopped = True
+            removed = [job for job in list(self._jobs.values()) if self._retire_locked(job)]
+            remove_root = not self._jobs
+        for job in removed:
+            shutil.rmtree(job.dir, ignore_errors=True)
+        if remove_root:
+            shutil.rmtree(self.root, ignore_errors=True)
