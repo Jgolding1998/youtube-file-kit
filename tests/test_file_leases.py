@@ -98,6 +98,37 @@ def test_multiple_readers_delay_deletion_until_last_release_and_release_is_idemp
     assert job.readers == 0 and not job.dir.exists() and job.id not in manager._jobs
 
 
+def test_reader_count_zero_can_precede_retired_directory_cleanup(app, monkeypatch):
+    from youtube_file_kit import downloader
+
+    manager = app.state.manager
+    job = completed(app)
+    lease = manager.acquire_file(job.id)
+    job.finished = time.monotonic() - 61
+    manager.sweep()
+    deleting, allow_delete = threading.Event(), threading.Event()
+    original = downloader.shutil.rmtree
+
+    def gated_delete(path, **kwargs):
+        if Path(path) == job.dir:
+            deleting.set()
+            assert allow_delete.wait(2)
+        return original(path, **kwargs)
+
+    monkeypatch.setattr(downloader.shutil, "rmtree", gated_delete)
+    worker = threading.Thread(target=lease.release)
+    worker.start()
+    try:
+        assert deleting.wait(2)
+        assert job.readers == 0 and manager.get(job.id) is None
+        assert job.dir.exists(), "reader bookkeeping finishes before the unlocked filesystem delete"
+    finally:
+        allow_delete.set()
+        worker.join(3)
+    assert not worker.is_alive()
+    assert job.readers == 0 and not job.dir.exists()
+
+
 def test_expired_file_cannot_start_a_new_transfer_before_the_periodic_sweep(app):
     manager = app.state.manager
     job = completed(app)

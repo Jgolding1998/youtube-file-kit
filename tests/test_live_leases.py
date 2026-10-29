@@ -58,7 +58,7 @@ def test_loopback_transfer_survives_expiry_or_releases_on_disconnect(tmp_path, d
             resume.set()
             assert response.read() == PAYLOAD
         deadline = time.monotonic() + 3
-        while job.readers and time.monotonic() < deadline:
+        while (job.readers or job.dir.exists()) and time.monotonic() < deadline:
             time.sleep(0.01)
         assert job.readers == 0 and not job.dir.exists()
     finally:
