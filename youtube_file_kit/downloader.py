@@ -9,7 +9,7 @@ import shutil
 import sys
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
@@ -201,6 +201,7 @@ class Job:
     cancel: threading.Event = field(default_factory=threading.Event)
     readers: int = field(default=0, repr=False)
     retired: bool = field(default=False, repr=False)
+    future: Optional[Future] = field(default=None, repr=False)
 
     def public(self) -> dict:
         data = {"state": self.state, "bytes": self.bytes}
@@ -263,7 +264,7 @@ class JobManager:
                 job = Job(id=job_id, url=url, dir=job_dir)
                 self._jobs[job_id] = job
                 try:
-                    self._pool.submit(self._run, job)
+                    job.future = self._pool.submit(self._run, job)
                 except BaseException:
                     self._jobs.pop(job_id, None)
                     removed.append(job)
@@ -320,10 +321,16 @@ class JobManager:
             shutil.rmtree(self.root, ignore_errors=True)
 
     def cancel(self, job_id: str) -> bool:
-        job = self.get(job_id)
-        if job is None:
-            return False
-        job.cancel.set()
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None or job.retired:
+                return False
+            job.cancel.set()
+            future, job.future = job.future, None  # claim cleanup once for simultaneous cancels
+        # Future callbacks run outside our lock. Cancellation only succeeds
+        # before a worker claims the job; running work observes the event above.
+        if future is not None and future.cancel():
+            self._finish(job, "cancelled")
         return True
 
     def _finish(self, job: Job, code: Optional[str]) -> None:

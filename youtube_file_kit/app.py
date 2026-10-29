@@ -124,7 +124,7 @@ def create_app(*, port: int, tools: Tools | None = None, limits: Limits | None =
         job = lookup(request)
         if job is None:
             return JSONResponse({"error": "not_found", "message": "Unknown download."}, status_code=404)
-        manager.cancel(job.id)
+        await anyio.to_thread.run_sync(manager.cancel, job.id)
         return JSONResponse({"ok": True})
 
     async def job_file(request: Request) -> Response:

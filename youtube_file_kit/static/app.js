@@ -59,6 +59,7 @@
         show("Done: " + data.filename + " (" + size(data.bytes) + "). Your browser is saving it.", "ok");
         const a = document.createElement("a");
         a.href = href;
+        a.download = "";
         document.body.appendChild(a);
         a.click();
         a.remove();

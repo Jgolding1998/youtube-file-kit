@@ -69,6 +69,31 @@ async function waitForServer(server) {
     await page.waitForSelector(".status.ok");
     check(await page.isVisible("#again"), "Save again link shown");
 
+    // An unavailable or expired result returns JSON without attachment headers.
+    // Keep the app usable when the browser rejects that file download.
+    await page.waitForTimeout(5500);  // fixture TTL is five seconds
+    const expiredPromise = page.waitForEvent("download", { timeout: 3000 }).catch(() => null);
+    await page.click("#again");
+    const expired = await expiredPromise;
+    check(page.url() === BASE + "/" && await page.isVisible("#url"), "unavailable Save again link preserves the app");
+    check(expired !== null && await expired.failure() !== null, "unavailable result fails as a download");
+
+    const autoPage = await context.newPage();
+    autoPage.on("pageerror", (e) => errors.push(String(e)));
+    await autoPage.goto(BASE + "/");
+    await autoPage.route("**/api/jobs/*", async (route) => {
+      const response = await route.fetch();
+      if ((await response.json()).state === "done") await autoPage.waitForTimeout(5500);
+      await route.fulfill({ response });  // file really expires while the completed status reply is delayed
+    });
+    await autoPage.fill("#url", "https://youtu.be/okokokokok1");
+    const failedAutoPromise = autoPage.waitForEvent("download", { timeout: 10000 }).catch(() => null);
+    await autoPage.click("#go");
+    const failedAuto = await failedAutoPromise;
+    check(autoPage.url() === BASE + "/" && await autoPage.isVisible("#url"), "failed automatic save preserves the app");
+    check(failedAuto !== null && await failedAuto.failure() !== null, "unavailable automatic save fails as a download");
+    await autoPage.close();
+
     await page.fill("#url", "https://www.youtube.com/watch?v=privatevid1");
     await page.click("#go");
     await page.waitForSelector(".status.bad");
@@ -86,6 +111,39 @@ async function waitForServer(server) {
     await page.click("#cancel");
     await page.waitForFunction(() => document.getElementById("status-text").textContent.includes("cancelled"));
     check(true, "cancel works");
+
+    // The fixture has one worker and one waiting slot. Cancelling a queued
+    // download must not depend on the running download finishing first.
+    async function submitOnNewPage(url) {
+      const tab = await context.newPage();
+      tab.on("pageerror", (e) => errors.push(String(e)));
+      await tab.goto(BASE + "/");
+      await tab.fill("#url", url);
+      const response = tab.waitForResponse((r) => r.url() === BASE + "/api/jobs" && r.request().method() === "POST");
+      await tab.click("#go");
+      const submitted = await response;
+      check(submitted.status() === 202, "queued scenario accepts the request");
+      return { tab, id: (await submitted.json()).id };
+    }
+    const blocker = await submitOnNewPage("https://youtu.be/sleepy00001");
+    const waiting = await submitOnNewPage("https://youtu.be/okokokokok1");
+    await waiting.tab.waitForFunction(() => document.getElementById("status-text").textContent.includes("free slot"));
+    const cancelReply = waiting.tab.waitForResponse((r) => r.url().endsWith("/cancel"));
+    await waiting.tab.click("#cancel");
+    await cancelReply;
+    const state = await (await fetch(BASE + "/api/jobs/" + waiting.id)).json();
+    check(state.state === "error" && state.error === "cancelled", "queued cancellation completes before the running job");
+    check((await (await fetch(BASE + "/api/jobs/" + blocker.id)).json()).state === "running", "queued cancel leaves the running job alone");
+    await waiting.tab.waitForFunction(() => !document.getElementById("go").disabled);
+    const replacementReply = waiting.tab.waitForResponse((r) => r.url() === BASE + "/api/jobs" && r.request().method() === "POST");
+    await waiting.tab.click("#go");
+    check((await replacementReply).status() === 202, "queued cancel releases capacity for a replacement");
+    const replacementDownload = waiting.tab.waitForEvent("download");
+    await blocker.tab.click("#cancel");
+    const replacement = await replacementDownload;
+    check(await replacement.failure() === null, "replacement finishes after the blocker is cancelled");
+    await waiting.tab.close();
+    await blocker.tab.close();
 
     await page.setViewportSize({ width: 390, height: 760 });
     check(!(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)), "mobile layout fits the viewport");
