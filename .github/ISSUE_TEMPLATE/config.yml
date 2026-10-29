@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Feedback and bug reports
+    url: https://github.com/Jgolding1998/Jgolding1998/issues/new?template=feedback.yml
+    about: Choose youtube-file-kit in the central form. Do not include private links, files or information.
+  - name: Security reporting
+    url: https://github.com/Jgolding1998/youtube-file-kit/blob/main/SECURITY.md
+    about: Follow the security policy for suspected vulnerabilities. Keep details out of public feedback.
