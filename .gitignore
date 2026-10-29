@@ -1,0 +1,33 @@
+# Virtual environments and caches
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+node_modules/
+
+# Runtime output and local scratch
+work/
+runtime/
+*.part
+*.log
+*.mp3
+*.mp4
+*.zip
+
+# Credentials and per-machine configuration
+.env
+.env.*
+.netrc
+_netrc
+cookies*.txt
+yt-dlp.conf
+yt-dlp.conf.*
+yt-dlp.config
+local-config/
+*.local.json
+*.local.toml

@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="csrf-token" content="{{CSRF}}">
+<title>YouTube File Kit</title>
+<link rel="stylesheet" href="/style.css">
+<script src="/app.js" defer></script>
+</head>
+<body>
+<main>
+  <h1>YouTube File Kit</h1>
+  <p class="lead">Paste a YouTube link and save the video to your computer.</p>
+  <form id="form" autocomplete="off">
+    <label for="url">YouTube link</label>
+    <div class="row">
+      <input id="url" name="url" type="text" inputmode="url" spellcheck="false" maxlength="300"
+             placeholder="https://www.youtube.com/watch?v=..." required>
+      <button id="go" type="submit">Download</button>
+    </div>
+  </form>
+  <div id="status" class="status" role="status" aria-live="polite" hidden>
+    <span id="status-text"></span>
+    <button id="cancel" type="button" class="link" hidden>Cancel</button>
+    <a id="again" class="link" hidden>Save again</a>
+  </div>
+  <p class="limits">{{LIMITS}}</p>
+  <details>
+    <summary>What works and what does not</summary>
+    <ul>
+      <li>Links like youtube.com/watch?v=..., youtu.be/... and YouTube Shorts.</li>
+      <li>Not supported: playlists, live streams, private, members-only, age-restricted, region-locked or DRM videos. This app never signs in.</li>
+      <li>Everything runs on this computer. Only download videos you have the right to save.</li>
+    </ul>
+  </details>
+</main>
+<footer><a href="https://github.com/Jgolding1998/Jgolding1998/issues/new?template=feedback.yml" target="_blank" rel="noopener noreferrer">Send feedback</a></footer>
+</body>
+</html>

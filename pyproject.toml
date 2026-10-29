@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools==84.2.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "youtube-file-kit"
+version = "0.1.0"
+description = "Local web app that saves one public YouTube video at a time, built on yt-dlp."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+dependencies = [
+    "yt-dlp==2026.10.26",
+    "yt-dlp-ejs==0.8.0",
+    "starlette==1.10.0",
+    "uvicorn==0.54.0",
+]
+
+[project.scripts]
+youtube-file-kit = "youtube_file_kit.__main__:main"
+
+[tool.setuptools]
+packages = ["youtube_file_kit"]
+
+[tool.setuptools.package-data]
+youtube_file_kit = ["static/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-p no:cacheprovider"
