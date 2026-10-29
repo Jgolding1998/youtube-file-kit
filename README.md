@@ -22,6 +22,8 @@ Only save videos you have the right to save, and follow YouTube's Terms of Servi
 
 Use a maintained, patched FFmpeg build from the distributors linked on its [official download page](https://www.ffmpeg.org/download.html). The app does not install or update FFmpeg or Deno.
 
+Put trusted tools in an absolute directory on PATH. Tool discovery ignores the working directory and relative or empty PATH entries; Windows tools must be actual `.exe` files.
+
 ## Start
 
 Windows (PowerShell):

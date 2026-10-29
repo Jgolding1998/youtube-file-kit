@@ -44,8 +44,20 @@ class Tools:
 
 def find_tools(use_ffmpeg: bool = True, use_deno: bool = True) -> Tools:
     def which(name: str) -> Optional[str]:
-        found = shutil.which(name)
-        return str(Path(found).resolve()) if found else None
+        cwd = os.path.normcase(os.path.abspath(os.getcwd()))
+        for entry in os.environ.get("PATH", os.defpath).split(os.pathsep):
+            if not entry or not os.path.isabs(entry):
+                continue
+            directory = os.path.abspath(entry)
+            if os.path.normcase(directory) == cwd:
+                continue
+            candidate = Path(directory) / (name + ".exe" if os.name == "nt" else name)
+            try:
+                if candidate.is_file() and os.access(candidate, os.X_OK):
+                    return str(candidate.resolve())
+            except OSError:
+                continue
+        return None
 
     return Tools(
         python=sys.executable,

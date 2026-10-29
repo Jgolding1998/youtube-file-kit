@@ -112,6 +112,54 @@ async function waitForServer(server) {
     await page.waitForFunction(() => document.getElementById("status-text").textContent.includes("cancelled"));
     check(true, "cancel works");
 
+    for (const failure of ['http', 'network']) {
+      const retry = await context.newPage();
+      retry.on('pageerror', e => errors.push(String(e)));
+      await retry.goto(BASE + '/');
+      let cancels = 0;
+      await retry.route('**/api/jobs/*/cancel', route => {
+        cancels++;
+        if (cancels > 1) return route.continue();
+        return failure === 'http' ? route.fulfill({status: 503, contentType: 'application/json', body: '{"message":"Owned transient cancel failure."}'}) : route.abort('failed');
+      });
+      await retry.fill('#url', 'https://youtu.be/sleepy00001'); await retry.click('#go');
+      await retry.waitForSelector('#cancel:not([hidden])'); await retry.click('#cancel');
+      await retry.waitForFunction(() => !document.getElementById('cancel').hidden && !document.getElementById('cancel').disabled);
+      check(cancels === 1, `${failure} cancel failure leaves one retryable request`);
+      await retry.click('#cancel');
+      await retry.waitForFunction(() => document.getElementById('status-text').textContent.includes('cancelled'));
+      check(cancels === 2, `${failure} cancellation can be retried successfully`);
+      await retry.close();
+    }
+
+    const reconnect = await context.newPage();
+    let polls = 0;
+    await reconnect.route('**/api/jobs/*', route => {
+      if (route.request().method() === 'GET' && ++polls === 1) return route.abort('failed');
+      return route.continue();
+    });
+    await reconnect.goto(BASE + '/'); await reconnect.fill('#url', 'https://youtu.be/okokokokok1');
+    const recoveredDownload = reconnect.waitForEvent('download');
+    await reconnect.click('#go');
+    check(await (await recoveredDownload).failure() === null, 'one failed status poll recovers the same downloadable job');
+    check(polls >= 2, 'status recovery continues polling instead of abandoning the job');
+    await reconnect.close();
+
+    const outage = await context.newPage();
+    let failedPolls = 0;
+    await outage.route('**/api/jobs/*', route => {
+      if (route.request().method() === 'GET') {failedPolls++; return route.fulfill({status: 503, contentType: 'text/plain', body: 'Owned transient failure'});}
+      return route.continue();
+    });
+    await outage.goto(BASE + '/'); await outage.fill('#url', 'https://youtu.be/sleepy00001');
+    const outageResponse = outage.waitForResponse(r => r.url() === BASE + '/api/jobs' && r.request().method() === 'POST');
+    await outage.click('#go'); const outageId = (await (await outageResponse).json()).id;
+    await outage.waitForFunction(() => !document.getElementById('go').disabled);
+    check(failedPolls === 3 && (await outage.textContent('#status-text')).includes('Lost contact'), 'persistent status outage stops after three failures with fixed feedback');
+    const csrf = await outage.locator('meta[name="csrf-token"]').getAttribute('content');
+    await context.request.post(BASE + '/api/jobs/' + outageId + '/cancel', {headers: {'Origin': BASE, 'X-CSRF-Token': csrf}});
+    await outage.close();
+
     // The fixture has one worker and one waiting slot. Cancelling a queued
     // download must not depend on the running download finishing first.
     async function submitOnNewPage(url) {

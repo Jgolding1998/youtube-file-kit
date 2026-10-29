@@ -9,6 +9,7 @@
   const cancelBtn = document.getElementById("cancel");
   const again = document.getElementById("again");
   let current = null;
+  let cancelling = null;
 
   function show(message, kind) {
     box.hidden = false;
@@ -30,27 +31,40 @@
     });
     let data = {};
     try { data = await res.json(); } catch (e) { /* non-JSON error */ }
-    return { ok: res.ok, data };
+    return { ok: res.ok, status: res.status, data };
   }
 
   function finish() {
     current = null;
+    cancelling = null;
     go.disabled = false;
+    cancelBtn.disabled = false;
     cancelBtn.hidden = true;
   }
 
   async function poll(id) {
+    let failures = 0;
     while (current === id) {
       let data;
       try {
         const res = await fetch("/api/jobs/" + id, { credentials: "same-origin" });
-        data = await res.json();
+        try { data = await res.json(); } catch (e) { if (res.ok) throw e; data = {}; }
+        if (current !== id) return;
+        if (res.status >= 500) throw new Error("Temporary status failure");
         if (!res.ok) { show(data.message || "Download not found.", "bad"); return finish(); }
+        failures = 0;
       } catch (e) {
-        show("Lost contact with the app. Is it still running?", "bad");
-        return finish();
+        if (current !== id) return;
+        if (++failures >= 3) {
+          show("Lost contact with the app. Is it still running?", "bad");
+          return finish();
+        }
+        show("Contact interrupted. Retrying...");
+        await new Promise((r) => setTimeout(r, 1000));
+        continue;
       }
-      if (data.state === "queued") show("Waiting for a free slot...");
+      if (cancelling === id && (data.state === "queued" || data.state === "running")) show("Cancelling...");
+      else if (data.state === "queued") show("Waiting for a free slot...");
       else if (data.state === "running") show(data.bytes ? "Downloading... " + size(data.bytes) : "Contacting YouTube...");
       else if (data.state === "done") {
         const href = "/api/jobs/" + id + "/file";
@@ -74,7 +88,7 @@
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
-    if (current) return;
+    if (current || go.disabled) return;
     const url = input.value.trim();
     if (!url) return;
     go.disabled = true;
@@ -92,15 +106,31 @@
       return finish();
     }
     current = result.data.id;
+    cancelBtn.disabled = false;
     cancelBtn.hidden = false;
     poll(current);
   });
 
   cancelBtn.addEventListener("click", async () => {
-    if (!current) return;
+    if (!current || cancelBtn.disabled) return;
     const id = current;
-    cancelBtn.hidden = true;
+    cancelBtn.disabled = true;
+    cancelling = id;
     show("Cancelling...");
-    try { await post("/api/jobs/" + id + "/cancel"); } catch (e) { /* poll reports state */ }
+    try {
+      const result = await post("/api/jobs/" + id + "/cancel");
+      if (current !== id) return;
+      if (result.ok || result.status === 404) cancelBtn.hidden = true;
+      else {
+        cancelling = null;
+        cancelBtn.disabled = false;
+        show(result.data.message || "Could not cancel. Press Cancel to retry.", "bad");
+      }
+    } catch (e) {
+      if (current !== id) return;
+      cancelling = null;
+      cancelBtn.disabled = false;
+      show("Could not cancel. Press Cancel to retry.", "bad");
+    }
   });
 })();
