@@ -23,6 +23,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install pinned, hash-checked dependencies
-        run: python -m pip install --require-hashes --only-binary=:all: -r requirements-dev.txt
+        run: >-
+          python -m pip install --require-hashes --only-binary=:all: -r requirements-dev.txt
       - name: Run tests (fake transport, no YouTube traffic)
         run: python -m pytest -q
