@@ -261,14 +261,12 @@ class JobManager:
                 active = sum(1 for j in self._jobs.values() if j.state in ("queued", "running"))
                 if self._closed or active >= self.limits.max_concurrent + self.limits.max_queued:
                     raise Busy()
-                removed.extend(self._take_excess_finished(1))
                 charged = sum(j.state != "error" for j in self._jobs.values())
                 needed = max(0, charged - self._storage_slots + 1)
                 evictable = sorted((j for j in self._jobs.values() if j.state == "done" and not j.retired and not j.readers),
                                    key=lambda j: j.finished)
                 if len(evictable) < needed:
                     raise Busy()
-                removed.extend(j for j in evictable[:needed] if self._retire_locked(j))
                 job_id = secrets.token_hex(16)
                 job_dir = self.root / job_id
                 for sub in ("out", "tmp", "home"):
@@ -281,6 +279,8 @@ class JobManager:
                     self._jobs.pop(job_id, None)
                     removed.append(job)
                     raise
+                removed.extend(j for j in evictable[:needed] if self._retire_locked(j))
+                removed.extend(self._take_excess_finished(1))
         finally:
             for previous in removed:
                 shutil.rmtree(previous.dir, ignore_errors=True)

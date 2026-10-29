@@ -247,6 +247,36 @@ def test_retired_pinned_files_remain_charged_to_admission_limit(app):
     assert not manager._jobs and not list(manager.root.iterdir())
 
 
+def test_refused_admission_does_not_retire_a_readable_finished_file(tmp_path):
+    app = create_app(port=8765, root=tmp_path / "bounded", tools=Tools(python="unused"),
+                     limits=Limits(max_kept=8, job_ttl=60))
+    manager, leases = app.state.manager, []
+    try:
+        finished = [completed(app, number + 1) for number in range(8)]
+        leases = [manager.acquire_file(job.id) for job in finished]
+        for number in (9, 10):
+            completed(app, number).state = "running"
+        with pytest.raises(Busy):
+            manager.submit("https://www.youtube.com/watch?v=okokokokok1")
+        assert all(manager.get(job.id) is job and not job.retired for job in finished)
+        assert all(job.file_path.exists() for job in finished)
+    finally:
+        for lease in leases:
+            lease.release()
+        manager.shutdown()
+
+
+def test_executor_rejection_preserves_existing_downloads(app, monkeypatch):
+    manager = app.state.manager
+    job = completed(app)
+    def refused(*args):
+        raise RuntimeError("Synthetic executor rejection")
+    monkeypatch.setattr(manager._pool, "submit", refused)
+    with pytest.raises(RuntimeError):
+        manager.submit("https://www.youtube.com/watch?v=okokokokok1")
+    assert manager.get(job.id) is job and job.file_path.exists() and not job.retired
+
+
 def test_releasing_one_retired_file_restores_only_one_reserved_work_slot(app):
     manager = app.state.manager
     leases = [manager.acquire_file(completed(app, number + 1).id) for number in range(manager._storage_slots)]
