@@ -42,7 +42,10 @@ def canonical_video_url(text: str) -> str:
         raise InvalidURL("unexpected characters")
     if "://" not in text:
         text = "https://" + text
-    parts = urlsplit(text)
+    try:
+        parts = urlsplit(text)
+    except ValueError as exc:
+        raise InvalidURL("malformed host") from exc
     if parts.scheme.lower() not in ("http", "https"):
         raise InvalidURL("scheme")
     if parts.username is not None or parts.password is not None:

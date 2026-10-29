@@ -115,6 +115,15 @@ def test_bad_requests(make_client, body):
     assert r.status_code == 400 and r.json()["error"] == "invalid_url"
 
 
+@pytest.mark.parametrize("host", ["[youtube.com", "youtube.com]", "[youtube.com]", "[::bad::]", "[127.0.0.1]"])
+def test_malformed_authority_does_not_start_job(make_client, host):
+    client = make_client()
+    r = client.post("/api/jobs", json={"url": f"https://{host}/watch?v=okokokokok1"})
+    assert r.status_code == 400 and r.json()["error"] == "invalid_url"
+    assert r.headers["cache-control"] == "no-store"
+    assert not list(client.app_state.manager.root.iterdir())
+
+
 def test_non_json_and_oversized(make_client):
     client = make_client()
     r = client.post("/api/jobs", content=b"url=x", headers={"Content-Type": "application/x-www-form-urlencoded"})

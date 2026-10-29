@@ -67,3 +67,9 @@ def test_rejects_everything_else(text):
 def test_rejects_non_string():
     with pytest.raises(InvalidURL):
         canonical_video_url(["https://youtu.be/BaW_jenozKc"])
+
+
+@pytest.mark.parametrize("host", ["[youtube.com", "youtube.com]", "[youtube.com]", "[::bad::]", "[127.0.0.1]"])
+def test_malformed_authority_uses_validation_error(host):
+    with pytest.raises(InvalidURL):
+        canonical_video_url(f"https://{host}/watch?v=BaW_jenozKc")

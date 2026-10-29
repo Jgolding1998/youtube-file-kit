@@ -163,8 +163,9 @@ def classify(stderr: bytes) -> str:
     return "failed"
 
 
-def _dir_size(path: Path) -> int:
+def _dir_usage(path: Path) -> tuple[int, int]:
     total = 0
+    largest = 0
     stack = [path]
     while stack:
         try:
@@ -176,12 +177,14 @@ def _dir_size(path: Path) -> int:
                         elif entry.is_file(follow_symlinks=False):
                             # os.stat, not the cached scandir entry: Windows does not refresh
                             # directory sizes for files that are still being written.
-                            total += os.stat(entry.path, follow_symlinks=False).st_size
+                            size = os.stat(entry.path, follow_symlinks=False).st_size
+                            total += size
+                            largest = max(largest, size)
                     except OSError:
                         continue
         except OSError:
             continue
-    return total
+    return total, largest
 
 
 @dataclass
@@ -371,8 +374,13 @@ class JobManager:
             now = time.monotonic()
             if now - last_check[0] >= 0.5:
                 last_check[0] = now
-                job.bytes = _dir_size(job.dir / "out") + _dir_size(job.dir / "tmp")
-                if job.bytes > limits.max_bytes:
+                output, output_largest = _dir_usage(job.dir / "out")
+                temporary, temporary_largest = _dir_usage(job.dir / "tmp")
+                job.bytes = output + temporary
+                # yt-dlp retains input streams while FFmpeg writes the merged file.
+                # Reserve bounded working space without doubling the final-file cap.
+                if (max(output_largest, temporary_largest) > limits.max_bytes
+                        or job.bytes > 2 * limits.max_bytes):
                     return "too_large"
             return None
 
