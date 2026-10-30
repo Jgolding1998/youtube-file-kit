@@ -15,7 +15,7 @@ from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Route
 
-from .downloader import MESSAGES, Busy, JobManager, Limits, Tools, find_tools
+from .downloader import MESSAGES, Busy, JobManager, Limits, Tools, find_tools, size_text
 from . import runtime
 from .guard import BodyTooLarge, LocalGuard
 from .urls import InvalidURL, canonical_video_url
@@ -23,11 +23,6 @@ from .urls import InvalidURL, canonical_video_url
 _JOB_ID = re.compile(r"[0-9a-f]{32}")
 _MEDIA_TYPES = {".mp4": "video/mp4", ".webm": "video/webm", ".m4a": "audio/mp4", ".mkv": "video/x-matroska"}
 _STATIC = {"/app.js": ("app.js", "text/javascript"), "/style.css": ("style.css", "text/css")}
-
-
-def _size_text(nbytes: int) -> str:
-    gib = nbytes / 1024**3
-    return f"{gib:g} GB" if gib >= 1 else f"{nbytes // (1024 * 1024)} MB"
 
 
 def _error(status: int, code: str) -> JSONResponse:
@@ -76,7 +71,7 @@ def create_app(*, port: int, tools: Tools | None = None, limits: Limits | None =
     manager = JobManager(root, tools, limits, **kwargs)
     static_dir = resources.files(__package__) / "static"
     limits_line = (f"Public videos only. One link at a time, up to {limits.max_duration // 60} minutes "
-                   f"or {_size_text(limits.max_bytes)}.")
+                   f"or {size_text(limits.max_bytes)}.")
     index_html = ((static_dir / "index.html").read_text("utf-8")
                   .replace("{{CSRF}}", token).replace("{{LIMITS}}", limits_line))
     static_files = {path: ((static_dir / name).read_bytes(), media) for path, (name, media) in _STATIC.items()}
@@ -118,7 +113,7 @@ def create_app(*, port: int, tools: Tools | None = None, limits: Limits | None =
         job = lookup(request)
         if job is None:
             return JSONResponse({"error": "not_found", "message": "Unknown download."}, status_code=404)
-        return JSONResponse(job.public())
+        return JSONResponse(job.public(manager.messages))
 
     async def job_cancel(request: Request) -> Response:
         job = lookup(request)

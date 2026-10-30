@@ -145,6 +145,25 @@ MESSAGES = {
     "failed": "The download failed.",
 }
 
+
+def size_text(nbytes: int) -> str:
+    gib = nbytes / 1024**3
+    if gib >= 1:
+        return f"{gib:g} GB"
+    return f"{nbytes // (1024 * 1024)} MB" if nbytes >= 1024 * 1024 else f"{nbytes // 1024} KB"
+
+
+def limit_messages(limits: Limits) -> dict:
+    """MESSAGES with this run's configured limits filled in. Only numbers from Limits are added."""
+    return {
+        **MESSAGES,
+        "too_large": (f"This video is larger than the {size_text(limits.max_bytes)} per-file limit, or merging it needed "
+                      f"more than {size_text(2 * limits.max_bytes)} of working space. "
+                      "To allow larger files, restart the app with a higher --max-mb (see README)."),
+        "too_long": (f"This video is longer than the {limits.max_duration // 60}-minute limit. "
+                     "To allow longer videos, restart the app with a higher --max-minutes (see README)."),
+    }
+
 # Ordered (needle, code) pairs matched against lowercased yt-dlp stderr.
 _PATTERNS = [
     ("drm protected", "drm"),
@@ -215,13 +234,13 @@ class Job:
     retired: bool = field(default=False, repr=False)
     future: Optional[Future] = field(default=None, repr=False)
 
-    def public(self) -> dict:
+    def public(self, messages: dict = MESSAGES) -> dict:
         data = {"state": self.state, "bytes": self.bytes}
         if self.state == "done":
             data["filename"] = self.filename
         if self.code:
             data["error"] = self.code
-            data["message"] = MESSAGES.get(self.code, MESSAGES["failed"])
+            data["message"] = messages.get(self.code, MESSAGES["failed"])
         return data
 
 
@@ -244,6 +263,7 @@ class FileLease:
 class JobManager:
     def __init__(self, root: Path, tools: Tools, limits: Limits, runner: Callable = run_bounded):
         self.root, self.tools, self.limits, self.runner = Path(root), tools, limits, runner
+        self.messages = limit_messages(limits)
         self.root.mkdir(parents=True, exist_ok=True)
         self._jobs: dict[str, Job] = {}
         self._lock = threading.Lock()

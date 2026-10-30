@@ -72,6 +72,20 @@ def test_size_limit_stops_download(make_client):
     client = make_client(max_bytes=200_000)
     data = wait_done(client, start(client, "https://youtu.be/bigfile0001"))
     assert data["error"] == "too_large"
+    assert "195 KB per-file limit" in data["message"] and "390 KB of working space" in data["message"]
+    assert "--max-mb" in data["message"]
+    assert str(client.app_state.manager.root) not in data["message"]
+
+
+def test_limit_messages_name_configured_limits():
+    from youtube_file_kit.downloader import Limits, limit_messages
+
+    defaults = limit_messages(Limits())
+    assert "2 GB per-file limit" in defaults["too_large"] and "4 GB of working space" in defaults["too_large"]
+    assert "180-minute limit" in defaults["too_long"] and "--max-minutes" in defaults["too_long"]
+    custom = limit_messages(Limits(max_bytes=500 * 1024 * 1024, max_duration=900))
+    assert "500 MB per-file limit" in custom["too_large"] and "15-minute limit" in custom["too_long"]
+    assert all("/" not in text and "\\" not in text for code, text in custom.items() if code != "invalid_url")
 
 
 def test_timeout(make_client):

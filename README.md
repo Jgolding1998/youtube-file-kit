@@ -59,6 +59,8 @@ Options (all optional):
 | `--no-ffmpeg` | off | Single-file formats only |
 | `--no-deno` | off | Do not let yt-dlp use Deno |
 
+`--max-minutes` accepts 1 to 600 and `--max-mb` 1 to 16384. Size and length errors name the limit in effect and the flag that changes it.
+
 ## How it works
 
 1. The link is parsed strictly and rebuilt as `https://www.youtube.com/watch?v=<id>`. Anything else is rejected before yt-dlp runs.
