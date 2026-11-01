@@ -2,7 +2,11 @@ name: tests
 
 on:
   push:
+    branches: [main]
   pull_request:
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -24,6 +28,12 @@ jobs:
           python-version: "3.12"
       - name: Install pinned, hash-checked dependencies
         run: >-
-          python -m pip install --require-hashes --only-binary=:all: -r requirements-dev.txt
+          python -m pip install --require-hashes --only-binary=:all: -r requirements-dev.txt -r requirements-tools.txt
       - name: Run tests (fake transport, no YouTube traffic)
-        run: python -m pytest -q
+        env:
+          YFK_REAL_NETWORK: '0'
+        run: python -m pytest -q --ignore=tests/test_real_network.py
+      - name: Audit the complete locked dependency closure
+        run: python tests/audit_lock.py
+      - name: Validate a fresh wheel outside the source checkout
+        run: python tests/check_wheel.py
